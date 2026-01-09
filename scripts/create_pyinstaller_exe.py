@@ -15,8 +15,8 @@ if not platform.system() == 'Windows':
     sys.exit(1)
 
 FILE_NAME: str = "aresbot"
-MY_BOT_NAME: str = "MyBotName"  # Changed to match config.yml key
-MY_BOT_RACE: str = "MyBotRace"  # Added to match config.yml key
+MY_BOT_NAME: str = "TankBotName"  # Changed to match config.yml key
+MY_BOT_RACE: str = "TankBotRace"  # Added to match config.yml key
 CONFIG_FILE: str = "config.yml"
 BUILD_FILES = [
     'zerg_builds.yml', 'zerg_builds.yaml',

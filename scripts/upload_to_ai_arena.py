@@ -9,7 +9,7 @@ API_TOKEN_ENV: str = "UPLOAD_API_TOKEN"
 BOT_ID_ENV: str = "UPLOAD_BOT_ID"
 CONFIG_FILE: str = "config.yml"
 AUTO_UPLOAD_TO_AIARENA: str = "AutoUploadToAiarena"
-MY_BOT_NAME: str = "MyBotName"
+MY_BOT_NAME: str = "TankBotName"
 ZIPFILE_NAME: str = "bot.zip"
 
 TOKEN: str = environ.get(API_TOKEN_ENV)
@@ -24,7 +24,7 @@ def get_bot_description() -> str:
     By default, attempts to get bot name from config
     and generate a basic description.
     """
-    bot_name: str = "MyBot"
+    bot_name: str = "TankBot"
     if name := retrieve_value_from_config(MY_BOT_NAME):
         bot_name = name
 

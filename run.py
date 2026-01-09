@@ -17,7 +17,7 @@ sys.path.append("ares-sc2")
 
 import yaml
 
-from bot.main import MyBot
+from bot.main import TankBot
 from ladder import run_ladder_game
 
 plt = platform.system()
@@ -39,12 +39,12 @@ else:
 
 CONFIG_FILE: str = "config.yml"
 MAP_FILE_EXT: str = "SC2Map"
-MY_BOT_NAME: str = "MyBotName"
-MY_BOT_RACE: str = "MyBotRace"
+MY_BOT_NAME: str = "TankBot"
+MY_BOT_RACE: str = "Terran"
 
 
 def main():
-    bot_name: str = "MyBot"
+    bot_name: str = "TankBot"
     race: Race = Race.Random
 
     __user_config_location__: str = path.abspath(".")
@@ -58,7 +58,7 @@ def main():
             if MY_BOT_RACE in config:
                 race = Race[config[MY_BOT_RACE].title()]
 
-    bot1 = Bot(race, MyBot(), bot_name)
+    bot1 = Bot(race, TankBot(), bot_name)
 
     if "--LadderServer" in sys.argv:
         # Ladder game started by LadderManager
