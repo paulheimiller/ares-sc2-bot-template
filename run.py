@@ -45,7 +45,7 @@ MY_BOT_RACE: str = "Terran"
 
 def main():
     bot_name: str = "TankBot"
-    race: Race = Race.Random
+    race: Race = Race.Terran
 
     __user_config_location__: str = path.abspath(".")
     user_config_path: str = path.join(__user_config_location__, CONFIG_FILE)
@@ -95,7 +95,7 @@ def main():
         random_race = random.choice([Race.Zerg, Race.Terran, Race.Protoss])
         print("Starting local game...")
         run_game(
-            maps.get(random.choice(map_list)),
+            maps.get("TorchesAIE_v4"),
             [
                 bot1,
                 Computer(random_race, Difficulty.CheatVision, ai_build=AIBuild.Macro),
