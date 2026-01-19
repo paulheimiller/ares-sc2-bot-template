@@ -48,6 +48,9 @@ class TankBot(AresBot):
         # Workers not building will be evenly distributed among command centers
         self.register_behavior(Mining())
 
+        # Build workers to maintain 16 per command center
+        await self.build_workers()
+
         # Mapping from our tech tree names to SC2 UnitTypeId
         name_to_unit_type = {
             "SupplyDepot": UnitTypeId.SUPPLYDEPOT,
@@ -172,6 +175,54 @@ class TankBot(AresBot):
                             )
 
         return all_ready
+
+    async def build_workers(self) -> None:
+        """
+        Build workers (SCVs) to maintain 16 per command center.
+        Only builds workers if we have fewer than 16 per townhall.
+        """
+        # Get all townhalls (CommandCenter, OrbitalCommand, PlanetaryFortress)
+        townhalls = self.townhalls.ready
+
+        if not townhalls:
+            return
+
+        # Count current workers
+        current_workers = self.workers.amount
+
+        # Calculate target workers (16 per command center)
+        target_workers = len(townhalls) * 16
+
+        # Don't build if we're at or above target
+        if current_workers >= target_workers:
+            return
+
+        # Check if we have enough supply
+        if self.supply_left < 1 and self.supply_cap < 200:
+            # Build supply depot if needed
+            if self.can_afford(UnitTypeId.SUPPLYDEPOT):
+                pending_depots = self.structures.filter(
+                    lambda s: s.type_id == UnitTypeId.SUPPLYDEPOT and not s.is_ready
+                )
+                if len(pending_depots) == 0:
+                    self.register_behavior(
+                        BuildStructure(
+                            base_location=self.start_location,
+                            structure_id=UnitTypeId.SUPPLYDEPOT,
+                            production=False,
+                        )
+                    )
+            return
+
+        # Build workers from idle townhalls that can afford it
+        for townhall in townhalls:
+            if current_workers >= target_workers:
+                break
+
+            # Check if townhall is idle and we can afford a worker
+            if townhall.is_idle and self.can_afford(UnitTypeId.SCV):
+                townhall.train(UnitTypeId.SCV)
+                current_workers += 1  # Count the worker we just queued
 
     async def build_units(self, unit_type: UnitTypeId, num_units: int) -> None:
         """
