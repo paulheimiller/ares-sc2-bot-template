@@ -3,6 +3,7 @@ from typing import Optional
 from ares import AresBot
 from ares.behaviors.macro import BuildStructure, Mining, SpawnController, TechUp
 from ares.consts import TECHLAB_TYPES
+from sc2.ids.ability_id import AbilityId
 from sc2.ids.unit_typeid import UnitTypeId
 
 from bot.terran_tech_tree import get_build_requirements
@@ -30,6 +31,13 @@ class TankBot(AresBot):
         self.marines_ready = False
         self.tanks_ready = False
         self.vikings_ready = False
+
+        # Unit orders - tracks how many of each unit type we want to build
+        self.unit_orders = {
+            UnitTypeId.MARINE: {"total": 10, "completed": 0},
+            UnitTypeId.SIEGETANK: {"total": 5, "completed": 0},
+            UnitTypeId.VIKING: {"total": 5, "completed": 0},
+        }
 
     async def on_start(self) -> None:
         await super(TankBot, self).on_start()
@@ -83,11 +91,11 @@ class TankBot(AresBot):
 
         # Phase 4: Build units when structures are ready
         if self.marines_ready:
-            await self.build_units(UnitTypeId.MARINE, num_units=10)
+            await self.build_units(UnitTypeId.MARINE, self.unit_orders)
         if self.tanks_ready:
-            await self.build_units(UnitTypeId.SIEGETANK, num_units=5)
+            await self.build_units(UnitTypeId.SIEGETANK, self.unit_orders)
         if self.vikings_ready:
-            await self.build_units(UnitTypeId.VIKING, num_units=3)
+            await self.build_units(UnitTypeId.VIKING, self.unit_orders)
 
     def _build_required_structures(
         self, build_order: dict, name_to_unit_type: dict
@@ -224,9 +232,9 @@ class TankBot(AresBot):
                 townhall.train(UnitTypeId.SCV)
                 current_workers += 1  # Count the worker we just queued
 
-    async def build_units(self, unit_type: UnitTypeId, num_units: int) -> None:
+    async def build_units(self, unit_type: UnitTypeId, unit_orders: dict) -> None:
         """
-        Build a specified number of units when structures are ready.
+        Build units based on the order structure, tracking completed units.
         Checks if resources are available before issuing build commands.
         Automatically builds supply depots if supply is insufficient.
 
@@ -234,15 +242,41 @@ class TankBot(AresBot):
         ----------
         unit_type : UnitTypeId
             The type of unit to build (e.g., UnitTypeId.MARINE, UnitTypeId.SIEGETANK)
-        num_units : int
-            The number of units to build
+        unit_orders : dict
+            Dictionary tracking unit orders with structure:
+            {UnitTypeId: {"total": int, "completed": int}}
 
         Examples
         --------
-        >>> self.build_units(UnitTypeId.MARINE, 10)
-        >>> self.build_units(UnitTypeId.SIEGETANK, 5)
-        >>> self.build_units(UnitTypeId.VIKING, 3)
+        >>> self.build_units(UnitTypeId.MARINE, self.unit_orders)
+        >>> self.build_units(UnitTypeId.SIEGETANK, self.unit_orders)
+        >>> self.build_units(UnitTypeId.VIKING, self.unit_orders)
         """
+        # Check if this unit type has an order
+        if unit_type not in unit_orders:
+            return
+
+        order = unit_orders[unit_type]
+
+        # Calculate how many units are left to build
+        num_units = order["total"] - order["completed"]
+
+        # If order is complete, return early
+        if num_units <= 0:
+            return
+
+        # Count existing units of this type (including those in production)
+        existing_units = self.units(unit_type).amount
+
+        # Update completed count based on existing units
+        if existing_units > order["completed"]:
+            order["completed"] = min(existing_units, order["total"])
+            num_units = order["total"] - order["completed"]
+
+            # If we just completed the order, print a message
+            if num_units <= 0:
+                print(f"Order complete: {order['total']} {unit_type.name}s built!")
+                return
         # Get the supply cost of the unit type
         unit_supply_cost = self.calculate_supply_cost(unit_type)
 
