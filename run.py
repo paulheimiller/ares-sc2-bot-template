@@ -98,7 +98,7 @@ def main():
             maps.get("TorchesAIE_v4"),
             [
                 bot1,
-                Computer(random_race, Difficulty.CheatVision, ai_build=AIBuild.Macro),
+                Computer(random_race, Difficulty.Hard, ai_build=AIBuild.Macro),
             ],
             realtime=False,
         )

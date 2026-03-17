@@ -1,7 +1,8 @@
 from typing import Optional
 
 from ares import AresBot
-from ares.behaviors.macro import BuildStructure, Mining, SpawnController, TechUp
+from ares.behaviors.macro import BuildStructure, GasBuildingController, Mining, SpawnController, TechUp
+from ares.behaviors.combat.group import AMoveGroup
 from ares.consts import TECHLAB_TYPES
 from sc2.ids.ability_id import AbilityId
 from sc2.ids.unit_typeid import UnitTypeId
@@ -31,12 +32,13 @@ class TankBot(AresBot):
         self.marines_ready = False
         self.tanks_ready = False
         self.vikings_ready = False
+        self.all_builds_complete = False  # Track when all building orders are fulfilled
 
         # Unit orders - tracks how many of each unit type we want to build
         self.unit_orders = {
-            UnitTypeId.MARINE: {"total": 10, "completed": 0},
-            UnitTypeId.SIEGETANK: {"total": 5, "completed": 0},
-            UnitTypeId.VIKING: {"total": 5, "completed": 0},
+            UnitTypeId.MARINE: {"total": 20, "completed": 0, "baseline": 0},
+            UnitTypeId.SIEGETANK: {"total": 10, "completed": 0, "baseline": 0},
+            UnitTypeId.VIKINGFIGHTER: {"total": 10, "completed": 0, "baseline": 0},
         }
 
     async def on_start(self) -> None:
@@ -52,12 +54,34 @@ class TankBot(AresBot):
     async def on_step(self, iteration: int) -> None:
         await super(TankBot, self).on_step(iteration)
 
-        # Register Mining behavior to automatically assign workers to gather resources
-        # Workers not building will be evenly distributed among command centers
-        self.register_behavior(Mining())
+        # Register Mining behavior with speed mining optimizations
+        # mineral_boost: Enables mineral boosting for faster mineral gathering
+        # vespene_boost: Enables vespene boosting (optimizes gas mining)
+        # long_distance_mine: Workers can long-distance mine if they have nothing to do
+        # workers_per_gas: Optimal worker count per gas geyser (typically 2-3 for speed mining)
+        # keep_safe: Workers will flee if they're in danger
+        self.register_behavior(
+            Mining(
+                mineral_boost=True,
+                vespene_boost=True,
+                long_distance_mine=True,
+                workers_per_gas=3,
+                keep_safe=True,
+            )
+        )
+
+        # Build gas buildings (refineries) - one per townhall
+        # This automatically handles finding available geysers and building refineries
+        num_geysers_to_build = len(self.townhalls.ready) * 2  # 1 geyser per townhall
+        self.register_behavior(
+            GasBuildingController(to_count=num_geysers_to_build, max_pending=1)
+        )
 
         # Build workers to maintain 16 per command center
         await self.build_workers()
+
+        # Build refineries for vespene mining from available gas geysers
+        await self.build_refineries()
 
         # Mapping from our tech tree names to SC2 UnitTypeId
         name_to_unit_type = {
@@ -95,7 +119,57 @@ class TankBot(AresBot):
         if self.tanks_ready:
             await self.build_units(UnitTypeId.SIEGETANK, self.unit_orders)
         if self.vikings_ready:
-            await self.build_units(UnitTypeId.VIKING, self.unit_orders)
+            await self.build_units(UnitTypeId.VIKINGFIGHTER, self.unit_orders)
+
+        # Phase 5: Once all builds are complete, move all units to enemy base
+        if not self.all_builds_complete and self._check_all_builds_complete():
+            print("All build orders fulfilled! Moving all units to enemy base.")
+            self.all_builds_complete = True
+
+        # Move all units to enemy base if builds are complete
+        if self.all_builds_complete:
+            await self._attack_enemy_base()
+
+    def _check_all_builds_complete(self) -> bool:
+        """
+        Check if all unit build orders have been fulfilled.
+        Counts actual units rather than relying on queued count.
+        Returns True when all ordered units have been built and exist.
+        """
+        # Count actual completed units for each type
+        for unit_type, order in self.unit_orders.items():
+            actual_count = self.units.filter(lambda u: u.type_id == unit_type).amount
+            if actual_count < order["total"]:
+                print(f"{unit_type.name}: {actual_count}/{order['total']} complete")
+                return False
+        return True
+
+    async def _attack_enemy_base(self) -> None:
+        """
+        Move all units to the enemy base.
+        Uses AMoveGroup behavior to attack-move all units toward the enemy starting location.
+        """
+        # Get all army units (combat units)
+        army_units = self.units.filter(
+            lambda u: u.type_id in [
+                UnitTypeId.MARINE,
+                UnitTypeId.SIEGETANK,
+                UnitTypeId.VIKINGFIGHTER,
+            ]
+        )
+
+        if army_units.amount == 0:
+            return  # No units to move
+
+        # Register attack-move behavior to attack enemy base
+        # This will move all units toward the enemy starting location
+        self.register_behavior(
+            AMoveGroup(
+                group=list(army_units),
+                group_tags={u.tag for u in army_units},
+                target=self.enemy_start_locations[0],
+            )
+        )
 
     def _build_required_structures(
         self, build_order: dict, name_to_unit_type: dict
@@ -184,6 +258,13 @@ class TankBot(AresBot):
 
         return all_ready
 
+    async def build_refineries(self) -> None:
+        """
+        Placeholder for additional gas building logic if needed.
+        GasBuildingController handles the main refinery construction.
+        """
+        pass
+
     async def build_workers(self) -> None:
         """
         Build workers (SCVs) to maintain 16 per command center.
@@ -202,11 +283,21 @@ class TankBot(AresBot):
         target_workers = len(townhalls) * 16
 
         # Don't build if we're at or above target
-        if current_workers >= target_workers:
-            return
+        # if current_workers <= target_workers:
+        #     return
 
-        # Check if we have enough supply
-        if self.supply_left < 1 and self.supply_cap < 200:
+        # Build workers from idle townhalls that can afford it
+        for townhall in townhalls:
+            if current_workers >= target_workers:
+                break
+
+            # Check if townhall is idle and we can afford a worker
+            if townhall.is_idle and self.can_afford(UnitTypeId.SCV):
+                townhall.train(UnitTypeId.SCV)
+                current_workers += 1  # Count the worker we just queued
+
+        # Check if we have enogh supply
+        if self.supply_left < 50 and self.supply_cap < 200:
             # Build supply depot if needed
             if self.can_afford(UnitTypeId.SUPPLYDEPOT):
                 pending_depots = self.structures.filter(
@@ -220,21 +311,13 @@ class TankBot(AresBot):
                             production=False,
                         )
                     )
-            return
+        return
 
-        # Build workers from idle townhalls that can afford it
-        for townhall in townhalls:
-            if current_workers >= target_workers:
-                break
 
-            # Check if townhall is idle and we can afford a worker
-            if townhall.is_idle and self.can_afford(UnitTypeId.SCV):
-                townhall.train(UnitTypeId.SCV)
-                current_workers += 1  # Count the worker we just queued
 
     async def build_units(self, unit_type: UnitTypeId, unit_orders: dict) -> None:
         """
-        Build units based on the order structure, tracking completed units.
+        Build units based on the order structure.
         Checks if resources are available before issuing build commands.
         Automatically builds supply depots if supply is insufficient.
 
@@ -258,68 +341,39 @@ class TankBot(AresBot):
 
         order = unit_orders[unit_type]
 
-        # Calculate how many units are left to build
-        num_units = order["total"] - order["completed"]
+        # Count how many of this unit type we currently have
+        actual_count = self.units.filter(lambda u: u.type_id == unit_type).amount
+        target_count = order["total"]
 
         # If order is complete, return early
-        if num_units <= 0:
+        if actual_count >= target_count:
             return
 
-        # Count existing units of this type (including those in production)
-        existing_units = self.units(unit_type).amount
+        # Calculate how many more units we need to build
+        num_units_needed = target_count - actual_count
 
-        # Update completed count based on existing units
-        if existing_units > order["completed"]:
-            order["completed"] = min(existing_units, order["total"])
-            num_units = order["total"] - order["completed"]
-
-            # If we just completed the order, print a message
-            if num_units <= 0:
-                print(f"Order complete: {order['total']} {unit_type.name}s built!")
-                return
-        # Get the supply cost of the unit type
-        unit_supply_cost = self.calculate_supply_cost(unit_type)
-
-        # Check if we have enough supply for at least one unit
-        if self.supply_left < unit_supply_cost and self.supply_cap < 200:
-            # We need more supply - build a supply depot
-            if self.can_afford(UnitTypeId.SUPPLYDEPOT):
-                # Check if we're not already building a supply depot
-                pending_depots = self.structures.filter(
-                    lambda s: s.type_id == UnitTypeId.SUPPLYDEPOT and not s.is_ready
-                )
-                # Only build if we don't have one already in progress
-                if len(pending_depots) == 0:
-                    self.register_behavior(
-                        BuildStructure(
-                            base_location=self.start_location,
-                            structure_id=UnitTypeId.SUPPLYDEPOT,
-                            production=False,
-                        )
-                    )
-            return  # Wait for supply before building units
-
-        # Check if we can afford at least one unit before registering behavior
-        if not self.can_afford(unit_type):
-            return
-
-        # Create army composition dict with single unit type
-        army_comp = {
-            unit_type: {
-                "proportion": 1.0,
-                "priority": 0
+        # Try to build units, let SpawnController handle resource/supply checks
+        try:
+            # Create army composition dict with single unit type
+            army_comp = {
+                unit_type: {
+                    "proportion": 1.0,
+                    "priority": 0
+                }
             }
-        }
 
-        # Register SpawnController behavior with maximum set to num_units
-        # Note: SpawnController will handle resource checking for each individual unit
-        self.register_behavior(
-            SpawnController(
-                army_composition_dict=army_comp,
-                maximum=num_units,
-                freeflow_mode=True  # Don't worry about proportions for single unit type
+            # Register SpawnController behavior with maximum set to num_units_needed
+            # SpawnController handles resource checking and supply requirements
+            self.register_behavior(
+                SpawnController(
+                    army_composition_dict=army_comp,
+                    maximum=num_units_needed,
+                    freeflow_mode=True  # Don't worry about proportions for single unit type
+                )
             )
-        )
+        except Exception:
+            # If there's any issue, just skip this iteration
+            return
 
     """
     Can use `python-sc2` hooks as usual, but make a call the inherited method in the superclass
