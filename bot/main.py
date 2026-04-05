@@ -3,11 +3,12 @@ from typing import Optional
 from ares import AresBot
 from ares.behaviors.macro import BuildStructure, GasBuildingController, Mining, SpawnController, TechUp
 from ares.behaviors.combat.group import AMoveGroup
-from ares.consts import TECHLAB_TYPES
+from ares.consts import TECHLAB_TYPES, UnitRole
 from sc2.ids.ability_id import AbilityId
 from sc2.ids.unit_typeid import UnitTypeId
 
 from bot.terran_tech_tree import get_build_requirements
+from bot.army_group_behavior import CoordinatedArmyGroup
 
 
 class TankBot(AresBot):
@@ -36,10 +37,14 @@ class TankBot(AresBot):
 
         # Unit orders - tracks how many of each unit type we want to build
         self.unit_orders = {
-            UnitTypeId.MARINE: {"total": 20, "completed": 0, "baseline": 0},
-            UnitTypeId.SIEGETANK: {"total": 10, "completed": 0, "baseline": 0},
-            UnitTypeId.VIKINGFIGHTER: {"total": 10, "completed": 0, "baseline": 0},
+            UnitTypeId.MARINE: {"total": 20, "completed": 0},
+            UnitTypeId.SIEGETANK: {"total": 6, "completed": 0},
+            # UnitTypeId.VIKINGFIGHTER: {"total": 6, "completed": 0},
         }
+
+        # Army group management
+        self.army_group_assigned = False  # Track when units are assigned to army group
+        self.army_behavior_registered = False  # Track when behavior has been registered
 
     async def on_start(self) -> None:
         await super(TankBot, self).on_start()
@@ -70,9 +75,9 @@ class TankBot(AresBot):
             )
         )
 
-        # Build gas buildings (refineries) - one per townhall
+        # Build gas buildings (refineries) - only 1 total
         # This automatically handles finding available geysers and building refineries
-        num_geysers_to_build = len(self.townhalls.ready) * 2  # 1 geyser per townhall
+        num_geysers_to_build = 1  # Only 1 geyser total
         self.register_behavior(
             GasBuildingController(to_count=num_geysers_to_build, max_pending=1)
         )
@@ -104,7 +109,11 @@ class TankBot(AresBot):
             if self._build_required_structures(self.siege_tank_build_order, name_to_unit_type):
                 print("Siege Tanks build requirements complete! Moving to Vikings phase.")
                 self.tanks_ready = True
-                self.current_build_phase = "vikings"
+                # Only proceed to vikings phase if Vikings are in unit orders
+                if UnitTypeId.VIKINGFIGHTER in self.unit_orders:
+                    self.current_build_phase = "vikings"
+                else:
+                    self.current_build_phase = "complete"
 
         # Phase 3: Build requirements for Vikings
         elif self.current_build_phase == "vikings":
@@ -126,9 +135,9 @@ class TankBot(AresBot):
             print("All build orders fulfilled! Moving all units to enemy base.")
             self.all_builds_complete = True
 
-        # Move all units to enemy base if builds are complete
+        # Assign units to army group and move them as a coordinated group
         if self.all_builds_complete:
-            await self._attack_enemy_base()
+            await self._manage_army_group()
 
     def _check_all_builds_complete(self) -> bool:
         """
@@ -144,32 +153,45 @@ class TankBot(AresBot):
                 return False
         return True
 
-    async def _attack_enemy_base(self) -> None:
+    async def _manage_army_group(self) -> None:
         """
-        Move all units to the enemy base.
-        Uses AMoveGroup behavior to attack-move all units toward the enemy starting location.
+        Manage the coordinated army group containing Marines, Tanks, and Vikings.
+
+        - Assigns all army units to CONTROL_GROUP_ONE on first run
+        - Registers the CoordinatedArmyGroup behavior to handle formation movement
         """
-        # Get all army units (combat units)
+        # Get all army units
         army_units = self.units.filter(
             lambda u: u.type_id in [
                 UnitTypeId.MARINE,
                 UnitTypeId.SIEGETANK,
+                UnitTypeId.SIEGETANKSIEGED,
                 UnitTypeId.VIKINGFIGHTER,
             ]
         )
 
         if army_units.amount == 0:
-            return  # No units to move
+            return
 
-        # Register attack-move behavior to attack enemy base
-        # This will move all units toward the enemy starting location
-        self.register_behavior(
-            AMoveGroup(
-                group=list(army_units),
-                group_tags={u.tag for u in army_units},
-                target=self.enemy_start_locations[0],
+        # Assign units to army group on first run
+        if not self.army_group_assigned:
+            print(f"Assigning {army_units.amount} units to Army Group 1")
+            for unit in army_units:
+                self.mediator.assign_role(
+                    tag=unit.tag, role=UnitRole.CONTROL_GROUP_ONE
+                )
+            self.army_group_assigned = True
+            return  # Skip behavior registration on assignment frame
+
+        # Register coordinated army group behavior (only once)
+        if not self.army_behavior_registered:
+            print(f"Registering CoordinatedArmyGroup behavior targeting {self.enemy_start_locations[0]}")
+            self.register_behavior(
+                CoordinatedArmyGroup(
+                    target=self.enemy_start_locations[0],
+                )
             )
-        )
+            self.army_behavior_registered = True
 
     def _build_required_structures(
         self, build_order: dict, name_to_unit_type: dict
