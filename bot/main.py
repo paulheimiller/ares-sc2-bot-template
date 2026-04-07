@@ -39,12 +39,12 @@ class TankBot(AresBot):
         self.unit_orders = {
             UnitTypeId.MARINE: {"total": 20, "completed": 0},
             UnitTypeId.SIEGETANK: {"total": 6, "completed": 0},
-            # UnitTypeId.VIKINGFIGHTER: {"total": 6, "completed": 0},
+            UnitTypeId.VIKINGFIGHTER: {"total": 6, "completed": 0},
         }
 
         # Army group management
         self.army_group_assigned = False  # Track when units are assigned to army group
-        self.army_behavior_registered = False  # Track when behavior has been registered
+        self.army_group_behavior: Optional[CoordinatedArmyGroup] = None  # Reused each step
 
     async def on_start(self) -> None:
         await super(TankBot, self).on_start()
@@ -181,17 +181,16 @@ class TankBot(AresBot):
                     tag=unit.tag, role=UnitRole.CONTROL_GROUP_ONE
                 )
             self.army_group_assigned = True
+            # Create the behavior instance once so state persists across frames
+            self.army_group_behavior = CoordinatedArmyGroup(
+                target=self.enemy_start_locations[0],
+            )
+            print(f"Created CoordinatedArmyGroup targeting {self.enemy_start_locations[0]}")
             return  # Skip behavior registration on assignment frame
 
-        # Register coordinated army group behavior (only once)
-        if not self.army_behavior_registered:
-            print(f"Registering CoordinatedArmyGroup behavior targeting {self.enemy_start_locations[0]}")
-            self.register_behavior(
-                CoordinatedArmyGroup(
-                    target=self.enemy_start_locations[0],
-                )
-            )
-            self.army_behavior_registered = True
+        # Re-register the same behavior instance every step so it executes each frame
+        if self.army_group_behavior is not None:
+            self.register_behavior(self.army_group_behavior)
 
     def _build_required_structures(
         self, build_order: dict, name_to_unit_type: dict
@@ -211,9 +210,10 @@ class TankBot(AresBot):
 
             unit_type = name_to_unit_type[building_name]
 
-            # Check if we need more supply before building structures
-            # (Some structures require supply, and we want to ensure we can build workers)
-            if self.supply_left < 2 and self.supply_cap < 200:
+            # Proactively build supply so structure/unit production isn't blocked.
+            # Threshold of 4: a bit lower than build_workers (6) since structure
+            # queues are less time-sensitive than worker/unit production.
+            if self.supply_left < 4 and self.supply_cap < 200:
                 # Build a supply depot if we can afford it
                 if self.can_afford(UnitTypeId.SUPPLYDEPOT):
                     pending_depots = self.structures.filter(
@@ -318,9 +318,10 @@ class TankBot(AresBot):
                 townhall.train(UnitTypeId.SCV)
                 current_workers += 1  # Count the worker we just queued
 
-        # Check if we have enogh supply
-        if self.supply_left < 50 and self.supply_cap < 200:
-            # Build supply depot if needed
+        # Build a supply depot when running low.
+        # Threshold of 6: depot takes ~14 s to build; 6 supply gives enough headroom
+        # to queue workers/units without hitting the cap before it finishes.
+        if self.supply_left < 6 and self.supply_cap < 200:
             if self.can_afford(UnitTypeId.SUPPLYDEPOT):
                 pending_depots = self.structures.filter(
                     lambda s: s.type_id == UnitTypeId.SUPPLYDEPOT and not s.is_ready

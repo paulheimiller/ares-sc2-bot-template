@@ -13,16 +13,7 @@ cargo build
 ```
 
 ## Running Tests
-```bash
-# Node.js
-npm test
-
-# Python
-pytest
-
-# Rust
-cargo test
-```
+Tests must run starcraft 2 game and examine output, using command:  poetry run python run.py
 
 ## Build Commands
 ```bash
