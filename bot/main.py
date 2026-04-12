@@ -9,6 +9,7 @@ from sc2.ids.unit_typeid import UnitTypeId
 
 from bot.terran_tech_tree import get_build_requirements
 from bot.army_group_behavior import CoordinatedArmyGroup
+from bot.event_logger import EventLogger
 
 
 class TankBot(AresBot):
@@ -36,18 +37,28 @@ class TankBot(AresBot):
         self.all_builds_complete = False  # Track when all building orders are fulfilled
 
         # Unit orders - tracks how many of each unit type we want to build
+        # Reduced for faster testing
         self.unit_orders = {
-            UnitTypeId.MARINE: {"total": 20, "completed": 0},
-            UnitTypeId.SIEGETANK: {"total": 6, "completed": 0},
-            UnitTypeId.VIKINGFIGHTER: {"total": 6, "completed": 0},
+            UnitTypeId.MARINE: {"total": 4, "completed": 0},
+            UnitTypeId.SIEGETANK: {"total": 4, "completed": 0},
+            UnitTypeId.VIKINGFIGHTER: {"total": 0, "completed": 0},  # Skip vikings for now
         }
 
         # Army group management
         self.army_group_assigned = False  # Track when units are assigned to army group
         self.army_group_behavior: Optional[CoordinatedArmyGroup] = None  # Reused each step
 
+        # Event logger for capturing game state
+        self.event_logger: Optional[EventLogger] = None
+
     async def on_start(self) -> None:
         await super(TankBot, self).on_start()
+
+        # Initialize event logger
+        self.event_logger = EventLogger(self, output_dir="game_logs")
+        print("\n=== EventLogger Initialized ===")
+        print(f"Logs will be saved to: game_logs/")
+        print("=" * 40 + "\n")
 
         # Print build orders on game start
         print("\n=== TankBot Build Orders ===")
@@ -58,6 +69,12 @@ class TankBot(AresBot):
 
     async def on_step(self, iteration: int) -> None:
         await super(TankBot, self).on_step(iteration)
+
+        # Log game state every 10 frames for testing (adjust frequency as needed)
+        if self.event_logger and iteration % 10 == 0:
+            self.event_logger.log_frame(iteration)
+            # Export incrementally every 200 frames to avoid memory buildup
+            self.event_logger.export_incremental(interval=200)
 
         # Register Mining behavior with speed mining optimizations
         # mineral_boost: Enables mineral boosting for faster mineral gathering
@@ -398,14 +415,24 @@ class TankBot(AresBot):
             # If there's any issue, just skip this iteration
             return
 
+    async def on_end(self, game_result) -> None:
+        await super(TankBot, self).on_end(game_result)
+
+        # Export final game state logs
+        if self.event_logger:
+            output_path = self.event_logger.export_to_json()
+            stats = self.event_logger.get_summary_stats()
+            print("\n=== EventLogger Final Export ===")
+            print(f"Exported game state to: {output_path}")
+            print(f"Total frames logged: {stats.get('total_frames', 0)}")
+            print(f"Total units: {stats.get('total_units', 0)}")
+            print(f"Game result: {game_result}")
+            print("=" * 40 + "\n")
+
     """
     Can use `python-sc2` hooks as usual, but make a call the inherited method in the superclass
     Examples:
     """
-    # async def on_end(self, game_result: Result) -> None:
-    #     await super(TankBot, self).on_end(game_result)
-    #
-    #     # custom on_end logic here ...
     #
     # async def on_building_construction_complete(self, unit: Unit) -> None:
     #     await super(TankBot, self).on_building_construction_complete(unit)

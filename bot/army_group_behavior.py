@@ -27,17 +27,20 @@ class CoordinatedArmyGroup:
     - Vikings: positioned above the tank formation for air support
     """
 
-    MOVE_DISTANCE = 2.0   # Tiles each group advances per leapfrog step
+    MOVE_DISTANCE = 13.0   # Tiles each group advances per leapfrog step (siege tank range)
     MARINE_DISTANCE = 2.0  # Marines stay 2 tiles ahead of tank center
     VIKING_ALTITUDE = 5.0  # Vikings positioned this distance north of tanks
 
     # Timing constants (behavior frames; ares default game_step=2 ≈ 11 fps)
     UNSIEGE_FRAMES = 40   # ~3.5 s to complete unsiege animation
-    MOVE_SIEGE_FRAMES = 56  # ~5 s to cover 2 tiles + complete siege animation
+    MOVE_SIEGE_FRAMES = 120  # ~11 s to cover 13 tiles + complete siege animation
 
     # Attack mode: switch from leapfrog to all-out attack within this range
     ATTACK_RANGE = 10.0
     ATTACK_REISSUE_FRAMES = 55  # Re-issue attack orders every ~5 s to unstick units
+
+    # Enemy detection range - stop and siege if enemies within this range
+    ENEMY_DETECTION_RANGE = 15.0
 
     def __init__(self, target: Point2) -> None:
         """
@@ -62,6 +65,10 @@ class CoordinatedArmyGroup:
 
         self.last_tank_center = None
         self.attack_mode = False
+
+        # Enemy engagement tracking - used to freeze state machine during combat
+        # and reset it cleanly when enemies clear
+        self._enemy_detected = False
 
     def execute(self, ai, config, mediator) -> bool:
         """Execute coordinated army movement each frame."""
@@ -110,14 +117,17 @@ class CoordinatedArmyGroup:
         if not self.tanks_divided and tanks.amount > 0:
             self._divide_tanks_into_groups(tanks)
 
-        # Move tanks with leapfrog pattern (BEFORE incrementing counter)
-        self._move_tanks_leapfrog(tanks, tank_center, ai)
+        # Move tanks with leapfrog pattern
+        # Returns True if state transition occurred (don't increment counter in that case)
+        transitioned = self._move_tanks_leapfrog(tanks, tank_center, ai)
 
         # Move marines relative to tank center
         self._move_marines(marines, tank_center)
 
         # Increment frame counter AFTER all movement logic
-        self.frames_since_state_change += 1
+        # BUT don't increment if we just transitioned states (counter was reset to 0)
+        if not transitioned:
+            self.frames_since_state_change += 1
 
         # Move vikings directly above tank center
         self._move_vikings(vikings, tank_center)
@@ -136,7 +146,7 @@ class CoordinatedArmyGroup:
 
         print(f"Tank groups formed: Group 0: {len(self.tank_group_0)} tanks, Group 1: {len(self.tank_group_1)} tanks")
 
-    def _move_tanks_leapfrog(self, tanks: Units, tank_center: Point2, ai) -> None:
+    def _move_tanks_leapfrog(self, tanks: Units, tank_center: Point2, ai) -> bool:
         """
         Leapfrog state machine: groups alternate between moving and sieging.
 
@@ -147,17 +157,50 @@ class CoordinatedArmyGroup:
                     unsieged (e.g. first cycle for group 1).
         "unsiege" : Issue unsiege once at frame 0. After UNSIEGE_FRAMES, transition
                     to "move" so the group can advance.
+
+        Returns
+        -------
+        bool
+            True if caller should NOT increment frames_since_state_change.
+            This happens when a state transition occurred OR when enemies are
+            engaged (counter is frozen during combat so the state machine
+            resumes correctly once enemies clear).
         """
         if tanks.amount == 0:
-            return
+            return False
+
+        # Check for enemy units in range - if found, all tanks should siege and attack
+        enemies_in_range = ai.enemy_units.closer_than(self.ENEMY_DETECTION_RANGE, tank_center)
+        if enemies_in_range.amount > 0:
+            if not self._enemy_detected:
+                self._enemy_detected = True
+                print(f"[Tank] Enemy detected within {self.ENEMY_DETECTION_RANGE} tiles — sieging all tanks")
+            for tank in tanks:
+                if tank.type_id == UnitTypeId.SIEGETANK:
+                    tank(AbilityId.SIEGEMODE_SIEGEMODE)
+                elif tank.type_id == UnitTypeId.SIEGETANKSIEGED:
+                    if tank.weapon_cooldown == 0:
+                        nearest_enemy = enemies_in_range.closest_to(tank)
+                        tank.attack(nearest_enemy)
+            # Return True to FREEZE the state machine counter so it does not advance
+            # during combat.  This prevents state transitions mid-fight and ensures
+            # the frame-0 orders are re-issued as soon as enemies clear.
+            return True
+
+        # Enemies just cleared — reset state machine so frame-0 orders fire immediately
+        if self._enemy_detected:
+            self._enemy_detected = False
+            self.frames_since_state_change = 0
+            print("[Tank] Enemies cleared — resuming leapfrog movement")
+            # Fall through: the frame-0 block below will re-issue movement orders
 
         # Stop when close enough to target
         if tank_center.distance_to(self.target) < 3.0:
-            return
+            return False  # No state transition
 
         move_direction = self.target - tank_center
         if move_direction.length < 0.1:
-            return
+            return False
         move_direction = move_direction.normalized
 
         active_tags = (
@@ -176,7 +219,7 @@ class CoordinatedArmyGroup:
                 self.tank_state = "move"
                 self.frames_since_state_change = 0
             else:
-                return  # All tanks dead
+                return False  # All tanks dead
 
         # Issue orders exactly once per state entry (frame 0 of each state)
         if self.frames_since_state_change == 0:
@@ -189,6 +232,7 @@ class CoordinatedArmyGroup:
             elif self.tank_state == "move":
                 # Move target is computed from active group's center for accuracy
                 active_tanks = [t for t in tanks if t.tag in active_tags]
+                print(f"[Tank] Move state: active_tags={len(active_tags)}, active_tanks={len(active_tanks)}, total_tanks={tanks.amount}")
                 if active_tanks:
                     group_center = Point2(
                         (
@@ -207,19 +251,27 @@ class CoordinatedArmyGroup:
                     move_target = tank_center + move_direction * self.MOVE_DISTANCE
 
                 moved = 0
+                unsieged = 0
+                sieged = 0
                 for tank in tanks:
                     if tank.tag not in active_tags:
                         continue
                     if tank.type_id == UnitTypeId.SIEGETANK:
+                        # Tank is unsieged - issue move and queue siege
                         tank.move(move_target)
                         tank(AbilityId.SIEGEMODE_SIEGEMODE, queue=True)
                         moved += 1
+                        unsieged += 1
                     elif tank.type_id == UnitTypeId.SIEGETANKSIEGED:
-                        # Shouldn't be sieged at start of "move" state, but handle it
+                        # Tank is still sieged - unsiege, then queue move and siege
                         tank(AbilityId.UNSIEGE_UNSIEGE)
-                print(f"[Tank] Group {self.active_tank_group}: {moved} tanks → {move_target}")
+                        tank.move(move_target, queue=True)
+                        tank(AbilityId.SIEGEMODE_SIEGEMODE, queue=True)
+                        moved += 1
+                        sieged += 1
+                print(f"[Tank] Group {self.active_tank_group}: {moved} tanks → {move_target} (unsieged:{unsieged}, sieged:{sieged})")
 
-        # State transitions
+        # State transitions - return True if transition occurred
         if self.tank_state == "move" and self.frames_since_state_change >= self.MOVE_SIEGE_FRAMES:
             next_group = 1 - self.active_tank_group
             next_tags = self.tank_group_0 if next_group == 0 else self.tank_group_1
@@ -231,11 +283,15 @@ class CoordinatedArmyGroup:
             self.tank_state = "unsiege" if next_has_sieged else "move"
             self.frames_since_state_change = 0
             print(f"[Tank] → Group {next_group}, state={self.tank_state}")
+            return True  # State transition occurred
 
         elif self.tank_state == "unsiege" and self.frames_since_state_change >= self.UNSIEGE_FRAMES:
             self.tank_state = "move"
             self.frames_since_state_change = 0
             print(f"[Tank] Group {self.active_tank_group}: unsiege done → move")
+            return True  # State transition occurred
+
+        return False  # No state transition
 
     def _execute_attack_mode(self, army_units) -> None:
         """

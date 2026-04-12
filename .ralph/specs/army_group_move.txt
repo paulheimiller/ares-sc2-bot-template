@@ -1,0 +1,5 @@
+
+
+I want tanks inside each army group to move in two smaller groups in leapfrog.  half the tanks will unsiege if necessary and move, then siege again, then the other half of tanks will unsiege if necessary and move, and then siege again.  the tanks should move the same distance as their firing range.  this has been partially implement but tanks are not moving correctly so there is a bug.
+
+when any enemy units are detected within range of army group, then all tanks should stop moving and siege up, and fire at enemy units.  only start moving again when no enemy units within range.

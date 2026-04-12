@@ -14,6 +14,7 @@
 - [x] Re-enable Vikings in unit_orders once core army behavior is stable
 - [x] Add attack-move fallback when army reaches enemy base
 - [x] Handle edge case: what if tanks are destroyed and groups become unbalanced
+- [x] Fix: state machine counter advancing during enemy engagement (tanks freeze after combat)
 
 ## Completed
 - [x] Project initialization
