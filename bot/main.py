@@ -34,19 +34,45 @@ class TankBot(AresBot):
         self.marines_ready = False
         self.tanks_ready = False
         self.vikings_ready = False
-        self.all_builds_complete = False  # Track when all building orders are fulfilled
 
-        # Unit orders - tracks how many of each unit type we want to build
-        # Reduced for faster testing
-        self.unit_orders = {
-            UnitTypeId.MARINE: {"total": 4, "completed": 0},
-            UnitTypeId.SIEGETANK: {"total": 4, "completed": 0},
-            UnitTypeId.VIKINGFIGHTER: {"total": 0, "completed": 0},  # Skip vikings for now
-        }
+        # Army group definitions - each group builds independently and moves once complete
+        # Available roles: CONTROL_GROUP_ONE through CONTROL_GROUP_NINE
+        self.army_groups = [
+            {
+                "role": UnitRole.CONTROL_GROUP_ONE,
+                "orders": {
+                    UnitTypeId.MARINE: 10,
+                    UnitTypeId.SIEGETANK: 4,
+                    UnitTypeId.VIKINGFIGHTER: 0,
+                },
+                "assigned": False,
+                "behavior": None,
+            },
+            {
+                "role": UnitRole.CONTROL_GROUP_TWO,
+                "orders": {
+                    UnitTypeId.MARINE: 10,
+                    UnitTypeId.SIEGETANK: 4,
+                    UnitTypeId.VIKINGFIGHTER: 0,
+                },
+                "assigned": False,
+                "behavior": None,
+            },
+            {
+                "role": UnitRole.CONTROL_GROUP_THREE,
+                "orders": {
+                    UnitTypeId.MARINE: 10,
+                    UnitTypeId.SIEGETANK: 4,
+                    UnitTypeId.VIKINGFIGHTER: 0,
+                },
+                "assigned": False,
+                "behavior": None,
+            },
+        ]
 
-        # Army group management
-        self.army_group_assigned = False  # Track when units are assigned to army group
-        self.army_group_behavior: Optional[CoordinatedArmyGroup] = None  # Reused each step
+        # Cumulative unit targets: how many total of each type we need built so far
+        # (sum of all groups up to and including the current one being built)
+        self._current_group_index = 0
 
         # Event logger for capturing game state
         self.event_logger: Optional[EventLogger] = None
@@ -126,8 +152,12 @@ class TankBot(AresBot):
             if self._build_required_structures(self.siege_tank_build_order, name_to_unit_type):
                 print("Siege Tanks build requirements complete! Moving to Vikings phase.")
                 self.tanks_ready = True
-                # Only proceed to vikings phase if Vikings are in unit orders
-                if UnitTypeId.VIKINGFIGHTER in self.unit_orders:
+                # Only proceed to vikings phase if any group wants Vikings
+                any_vikings = any(
+                    g["orders"].get(UnitTypeId.VIKINGFIGHTER, 0) > 0
+                    for g in self.army_groups
+                )
+                if any_vikings:
                     self.current_build_phase = "vikings"
                 else:
                     self.current_build_phase = "complete"
@@ -140,45 +170,44 @@ class TankBot(AresBot):
                 self.current_build_phase = "complete"
 
         # Phase 4: Build units when structures are ready
+        # Calculate cumulative targets for all groups up to current
+        cumulative_orders = self._get_cumulative_orders()
         if self.marines_ready:
-            await self.build_units(UnitTypeId.MARINE, self.unit_orders)
+            await self.build_units(UnitTypeId.MARINE, cumulative_orders)
         if self.tanks_ready:
-            await self.build_units(UnitTypeId.SIEGETANK, self.unit_orders)
+            await self.build_units(UnitTypeId.SIEGETANK, cumulative_orders)
         if self.vikings_ready:
-            await self.build_units(UnitTypeId.VIKINGFIGHTER, self.unit_orders)
+            await self.build_units(UnitTypeId.VIKINGFIGHTER, cumulative_orders)
 
-        # Phase 5: Once all builds are complete, move all units to enemy base
-        if not self.all_builds_complete and self._check_all_builds_complete():
-            print("All build orders fulfilled! Moving all units to enemy base.")
-            self.all_builds_complete = True
+        # Phase 5: Check if current group's units are ready, assign and launch
+        self._check_and_assign_army_groups()
 
-        # Assign units to army group and move them as a coordinated group
-        if self.all_builds_complete:
-            await self._manage_army_group()
+        # Phase 6: Execute behaviors for all launched army groups
+        for group in self.army_groups:
+            if group["behavior"] is not None:
+                self.register_behavior(group["behavior"])
 
-    def _check_all_builds_complete(self) -> bool:
+    def _get_cumulative_orders(self) -> dict:
         """
-        Check if all unit build orders have been fulfilled.
-        Counts actual units rather than relying on queued count.
-        Returns True when all ordered units have been built and exist.
+        Build a cumulative unit_orders dict for all groups up to and including
+        the current one being built. This tells build_units how many total
+        units of each type should exist.
         """
-        # Count actual completed units for each type
-        for unit_type, order in self.unit_orders.items():
-            actual_count = self.units.filter(lambda u: u.type_id == unit_type).amount
-            if actual_count < order["total"]:
-                print(f"{unit_type.name}: {actual_count}/{order['total']} complete")
-                return False
-        return True
+        cumulative = {}
+        for i, group in enumerate(self.army_groups):
+            if i > self._current_group_index:
+                break
+            for unit_type, count in group["orders"].items():
+                if unit_type not in cumulative:
+                    cumulative[unit_type] = {"total": 0, "completed": 0}
+                cumulative[unit_type]["total"] += count
+        return cumulative
 
-    async def _manage_army_group(self) -> None:
-        """
-        Manage the coordinated army group containing Marines, Tanks, and Vikings.
-
-        - Assigns all army units to CONTROL_GROUP_ONE on first run
-        - Registers the CoordinatedArmyGroup behavior to handle formation movement
-        """
-        # Get all army units
-        army_units = self.units.filter(
+    def _get_unassigned_army_units(self):
+        """Get army units that haven't been assigned to any group yet."""
+        # Units with ATTACKING role are the default for unassigned army units,
+        # but we check for units without a control group role
+        all_army = self.units.filter(
             lambda u: u.type_id in [
                 UnitTypeId.MARINE,
                 UnitTypeId.SIEGETANK,
@@ -186,28 +215,74 @@ class TankBot(AresBot):
                 UnitTypeId.VIKINGFIGHTER,
             ]
         )
+        # Filter out units already assigned to any army group
+        assigned_tags = set()
+        for group in self.army_groups:
+            if group["assigned"]:
+                role_units = self.mediator.get_units_from_role(role=group["role"])
+                assigned_tags.update(u.tag for u in role_units)
+        return all_army.filter(lambda u: u.tag not in assigned_tags)
 
-        if army_units.amount == 0:
+    def _check_and_assign_army_groups(self) -> None:
+        """
+        Check if the current group's unit requirements are met by unassigned units.
+        If so, assign them and create the behavior. Then advance to the next group.
+        """
+        if self._current_group_index >= len(self.army_groups):
             return
 
-        # Assign units to army group on first run
-        if not self.army_group_assigned:
-            print(f"Assigning {army_units.amount} units to Army Group 1")
-            for unit in army_units:
-                self.mediator.assign_role(
-                    tag=unit.tag, role=UnitRole.CONTROL_GROUP_ONE
-                )
-            self.army_group_assigned = True
-            # Create the behavior instance once so state persists across frames
-            self.army_group_behavior = CoordinatedArmyGroup(
-                target=self.enemy_start_locations[0],
-            )
-            print(f"Created CoordinatedArmyGroup targeting {self.enemy_start_locations[0]}")
-            return  # Skip behavior registration on assignment frame
+        group = self.army_groups[self._current_group_index]
+        if group["assigned"]:
+            self._current_group_index += 1
+            return
 
-        # Re-register the same behavior instance every step so it executes each frame
-        if self.army_group_behavior is not None:
-            self.register_behavior(self.army_group_behavior)
+        # Count unassigned units of each type
+        unassigned = self._get_unassigned_army_units()
+        for unit_type, needed in group["orders"].items():
+            if needed == 0:
+                continue
+            # Count how many unassigned units of this type we have
+            # For siege tanks, count both sieged and unsieged
+            if unit_type == UnitTypeId.SIEGETANK:
+                available = unassigned.filter(
+                    lambda u: u.type_id in [UnitTypeId.SIEGETANK, UnitTypeId.SIEGETANKSIEGED]
+                ).amount
+            else:
+                available = unassigned.filter(lambda u: u.type_id == unit_type).amount
+            if available < needed:
+                return  # Not enough units yet
+
+        # All requirements met — assign unassigned units to this group's role
+        group_num = self._current_group_index + 1
+        assigned_count = 0
+        units_to_assign = []
+
+        for unit_type, needed in group["orders"].items():
+            if needed == 0:
+                continue
+            if unit_type == UnitTypeId.SIEGETANK:
+                matching = unassigned.filter(
+                    lambda u: u.type_id in [UnitTypeId.SIEGETANK, UnitTypeId.SIEGETANKSIEGED]
+                )
+            else:
+                matching = unassigned.filter(lambda u: u.type_id == unit_type)
+            # Take only the number we need
+            for unit in list(matching)[:needed]:
+                units_to_assign.append(unit)
+
+        for unit in units_to_assign:
+            self.mediator.assign_role(tag=unit.tag, role=group["role"])
+            assigned_count += 1
+
+        group["assigned"] = True
+        group["behavior"] = CoordinatedArmyGroup(
+            target=self.enemy_start_locations[0],
+            role=group["role"],
+        )
+        print(f"=== Army Group {group_num} launched! {assigned_count} units assigned to {group['role'].value} ===")
+
+        # Advance to next group
+        self._current_group_index += 1
 
     def _build_required_structures(
         self, build_order: dict, name_to_unit_type: dict

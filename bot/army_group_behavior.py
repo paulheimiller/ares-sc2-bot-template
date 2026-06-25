@@ -7,8 +7,9 @@ Implements formation movement with Marines, Tanks, and Vikings:
 - Vikings: Centered directly above tanks
 """
 
-from typing import Set
+from typing import List, Set
 
+import numpy as np
 from ares.consts import UnitRole
 from sc2.ids.ability_id import AbilityId
 from sc2.ids.unit_typeid import UnitTypeId
@@ -42,14 +43,17 @@ class CoordinatedArmyGroup:
     # Enemy detection range - stop and siege if enemies within this range
     ENEMY_DETECTION_RANGE = 15.0
 
-    def __init__(self, target: Point2) -> None:
+    def __init__(self, target: Point2, role: UnitRole = UnitRole.CONTROL_GROUP_ONE) -> None:
         """
         Parameters
         ----------
         target : Point2
             Enemy location the army marches toward.
+        role : UnitRole
+            The role used to identify units belonging to this army group.
         """
         self.target = target
+        self.role = role
 
         # Leapfrog state machine:
         #   "move"    – issue move+queue_siege to active group at frame 0
@@ -70,10 +74,31 @@ class CoordinatedArmyGroup:
         # and reset it cleanly when enemies clear
         self._enemy_detected = False
 
+    def _get_pathing_waypoints(
+        self, start: Point2, target: Point2, mediator
+    ) -> List[Point2]:
+        """
+        Get waypoints along a path that avoids obstacles (rocks, gold minerals).
+
+        Uses ares-sc2's A* pathfinding on the cached ground grid, which marks
+        destructible rocks and gold minerals as non-pathable (np.inf).
+
+        Returns a list of spaced waypoints to queue as move commands.
+        Falls back to direct movement if no path is found.
+        """
+        grid: np.ndarray = mediator.get_cached_ground_grid
+        path: List[Point2] = mediator.find_low_priority_path(
+            start=start, target=target, grid=grid
+        )
+        if path:
+            return path
+        # Fallback: direct move if pathfinder returns empty
+        return [target]
+
     def execute(self, ai, config, mediator) -> bool:
         """Execute coordinated army movement each frame."""
         # Get army units from the mediator using the role we assigned them to
-        army_units = mediator.get_units_from_role(role=UnitRole.CONTROL_GROUP_ONE)
+        army_units = mediator.get_units_from_role(role=self.role)
         
         if not army_units.amount:
             return False
@@ -122,7 +147,7 @@ class CoordinatedArmyGroup:
         transitioned = self._move_tanks_leapfrog(tanks, tank_center, ai)
 
         # Move marines relative to tank center
-        self._move_marines(marines, tank_center)
+        self._move_marines(marines, tank_center, mediator)
 
         # Increment frame counter AFTER all movement logic
         # BUT don't increment if we just transitioned states (counter was reset to 0)
@@ -130,7 +155,7 @@ class CoordinatedArmyGroup:
             self.frames_since_state_change += 1
 
         # Move vikings directly above tank center
-        self._move_vikings(vikings, tank_center)
+        self._move_vikings(vikings, tank_center, mediator)
 
         self.last_tank_center = tank_center
         return True
@@ -248,7 +273,13 @@ class CoordinatedArmyGroup:
                         grp_dir = move_direction
                     move_target = group_center + grp_dir * self.MOVE_DISTANCE
                 else:
+                    group_center = tank_center
                     move_target = tank_center + move_direction * self.MOVE_DISTANCE
+
+                # Get pathfinding waypoints that avoid rocks and gold minerals
+                waypoints = self._get_pathing_waypoints(
+                    start=group_center, target=move_target, mediator=ai.mediator
+                )
 
                 moved = 0
                 unsieged = 0
@@ -257,19 +288,23 @@ class CoordinatedArmyGroup:
                     if tank.tag not in active_tags:
                         continue
                     if tank.type_id == UnitTypeId.SIEGETANK:
-                        # Tank is unsieged - issue move and queue siege
-                        tank.move(move_target)
+                        # Tank is unsieged - queue moves along waypoints, then siege
+                        tank.move(waypoints[0])
+                        for wp in waypoints[1:]:
+                            tank.move(wp, queue=True)
                         tank(AbilityId.SIEGEMODE_SIEGEMODE, queue=True)
                         moved += 1
                         unsieged += 1
                     elif tank.type_id == UnitTypeId.SIEGETANKSIEGED:
-                        # Tank is still sieged - unsiege, then queue move and siege
+                        # Tank is still sieged - unsiege, queue waypoints, then siege
                         tank(AbilityId.UNSIEGE_UNSIEGE)
-                        tank.move(move_target, queue=True)
+                        tank.move(waypoints[0], queue=True)
+                        for wp in waypoints[1:]:
+                            tank.move(wp, queue=True)
                         tank(AbilityId.SIEGEMODE_SIEGEMODE, queue=True)
                         moved += 1
                         sieged += 1
-                print(f"[Tank] Group {self.active_tank_group}: {moved} tanks → {move_target} (unsieged:{unsieged}, sieged:{sieged})")
+                print(f"[Tank] Group {self.active_tank_group}: {moved} tanks → {move_target} via {len(waypoints)} waypoints (unsieged:{unsieged}, sieged:{sieged})")
 
         # State transitions - return True if transition occurred
         if self.tank_state == "move" and self.frames_since_state_change >= self.MOVE_SIEGE_FRAMES:
@@ -314,12 +349,12 @@ class CoordinatedArmyGroup:
         if issued:
             print(f"[Army] Attack-move: {issued} units → {self.target}")
 
-    def _move_marines(self, marines, tank_center: Point2) -> None:
+    def _move_marines(self, marines, tank_center: Point2, mediator) -> None:
         """
         Move marines to maintain position 2 tiles from tank center.
 
         Marines stay close to tanks for support, moving incrementally.
-        They stop when reached and wait for tanks.
+        Uses pathfinding to avoid obstacles like rocks and gold minerals.
         """
         if marines.amount == 0:
             return
@@ -334,40 +369,40 @@ class CoordinatedArmyGroup:
         marine_target = tank_center + move_direction * self.MARINE_DISTANCE
 
         # Move marines if they're not already at target
-        moving_count = 0
         for marine in marines:
             distance_to_target = marine.position.distance_to(marine_target)
 
             if distance_to_target > 1.5:
-                # Move toward marine target position
-                marine.move(marine_target)
-                moving_count += 1
-        
-        # (no per-frame print; army-level status covers this)
+                # Use pathfinding to navigate around obstacles
+                waypoints = self._get_pathing_waypoints(
+                    start=marine.position, target=marine_target, mediator=mediator
+                )
+                marine.move(waypoints[0])
+                for wp in waypoints[1:]:
+                    marine.move(wp, queue=True)
             
 
-    def _move_vikings(self, vikings: Units, tank_center: Point2) -> None:
+    def _move_vikings(self, vikings: Units, tank_center: Point2, mediator) -> None:
         """
         Position vikings directly above tanks for air support.
 
         Vikings stay centered above the tank formation, maintaining altitude.
+        Uses air grid pathfinding to avoid obstacles.
         """
         if vikings.amount == 0:
             return
 
-        # Calculate direction of movement for better positioning
-        move_direction = self.target - tank_center
-        
         # Position vikings above tanks: north on the map (decreasing Y)
-        # This puts them in a support position relative to the tank center
         viking_target = tank_center + Point2((0, -self.VIKING_ALTITUDE))
 
         for viking in vikings:
-            # Check distance to target position
             distance_to_target = viking.position.distance_to(viking_target)
 
             if distance_to_target > 1.5:
-                # Move to altitude position above tanks
-                viking.move(viking_target)
-            # else: Hold position above tanks
+                # Vikings are air units - use air grid for pathfinding
+                grid: np.ndarray = mediator.get_air_grid
+                next_point: Point2 = mediator.find_path_next_point(
+                    start=viking.position, target=viking_target, grid=grid
+                )
+                viking.move(next_point)
 

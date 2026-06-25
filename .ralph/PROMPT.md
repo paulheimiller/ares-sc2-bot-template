@@ -31,7 +31,7 @@ When performing cleanup, refactoring, or restructuring tasks:
 - Deleting them will break Ralph and halt all autonomous development
 
 ## 🧪 Testing Guidelines (CRITICAL)
-- LIMIT testing to ~20% of your total effort per loop
+- Tests must run starcraft 2 game and examine output, using command:  poetry run python run.py
 - PRIORITIZE: Implementation > Documentation > Tests
 - Only write tests for NEW functionality you implement
 - Do NOT refactor existing tests unless broken

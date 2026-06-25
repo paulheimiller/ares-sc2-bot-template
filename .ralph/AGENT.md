@@ -1,35 +1,12 @@
 # Agent Build Instructions
 
 ## Project Setup
-```bash
-# Install dependencies (example for Node.js project)
-npm install
+python project using poetry is already setup.
 
-# Or for Python project
-pip install -r requirements.txt
-
-# Or for Rust project  
-cargo build
-```
 
 ## Running Tests
-Tests must run starcraft 2 game and examine output, using command:  poetry run python run.py
+Tests must run starcraft 2 game and examine state file output, using command:  poetry run python run.py
 
-## Build Commands
-```bash
-# Production build
-npm run build
-# or
-cargo build --release
-```
-
-## Development Server
-```bash
-# Start development server
-npm run dev
-# or
-cargo run
-```
 
 ## Key Learnings
 - Update this section when you learn new build optimizations
@@ -41,22 +18,7 @@ cargo run
 **CRITICAL**: All new features MUST meet the following mandatory requirements before being considered complete.
 
 ### Testing Requirements
-
-- **Minimum Coverage**: 85% code coverage ratio required for all new code
-- **Test Pass Rate**: 100% - all tests must pass, no exceptions
-- **Test Types Required**:
-  - Unit tests for all business logic and services
-  - Integration tests for API endpoints or main functionality
-  - End-to-end tests for critical user workflows
-- **Coverage Validation**: Run coverage reports before marking features complete:
-  ```bash
-  # Examples by language/framework
-  npm run test:coverage
-  pytest --cov=src tests/ --cov-report=term-missing
-  cargo tarpaulin --out Html
-  ```
-- **Test Quality**: Tests must validate behavior, not just achieve coverage metrics
-- **Test Documentation**: Complex test scenarios must include comments explaining the test strategy
+game state output file should be examined to confirm success
 
 ### Git Workflow Requirements
 
@@ -121,10 +83,6 @@ Before moving to the next feature, ALL changes must be:
 
 Before marking ANY feature as complete, verify:
 
-- [ ] All tests pass with appropriate framework command
-- [ ] Code coverage meets 85% minimum threshold
-- [ ] Coverage report reviewed for meaningful test quality
-- [ ] Code formatted according to project standards
 - [ ] Type checking passes (if applicable)
 - [ ] All changes committed with conventional commit messages
 - [ ] All commits pushed to remote repository
@@ -134,7 +92,6 @@ Before marking ANY feature as complete, verify:
 - [ ] .ralph/AGENT.md updated (if new patterns introduced)
 - [ ] Breaking changes documented
 - [ ] Features tested within Ralph loop (if applicable)
-- [ ] CI/CD pipeline passes
 
 ### Rationale
 
