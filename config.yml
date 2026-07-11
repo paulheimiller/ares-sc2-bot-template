@@ -4,10 +4,13 @@
 
 # Set custom values here for your bot
 MyBotName: MyBotName
-MyBotRace: Random
-# setting ture allows auto upload to aiareana (https://aiarena.net/) on push to `main` branch
+MyBotRace: Terran
+# setting true allows auto upload to aiareana (https://aiarena.net/) on push to `main` branch
 # see tutorial on readme before setting to True
 AutoUploadToAiarena: False
+BotZipPubliclyDownloadable: False
+BotDataPubliclyDownloadable: False
+BotDataEnabled: True
 ########################
 
 UseData: False
@@ -15,10 +18,17 @@ Debug: False
 GameStep: 2
 DebugGameStep: 2
 
+# Turn ares features on/off for performance reasons
+Features:
+    # this grid is useful for disruptor balls and maybe some other uses
+    # off by default to save computation
+    TacticalGroundGrid: False
+
 DebugOptions:
     # one of: Air, AirVsGround, Ground, GroundAvoidance, AirAvoidance
-    ActiveGrid: Ground
+    ActiveGrid: TacticalGround
     ChatDebug: True
     DebugSpawn: False
-    ShowPathingCost: False
+    ShowPathingCost: True
     ResourceDebug: False
+    ShowBuildingFormation: False
