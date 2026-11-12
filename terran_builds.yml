@@ -1,0 +1,123 @@
+# Terran build orders for MyBot (Tank bot)
+# Loaded automatically by ares when playing Terran (see AresBot.on_before_start).
+#
+# Line format: "<supply used> <COMMAND>" — integer is min supply to start step
+# Commands: SUPPLY, WORKER, GAS (=Refinery), EXPAND, or any UnitTypeID name
+# (structures like BARRACKS/FACTORY/BATTLELAB, units like MARINE/SIEGETANK —
+#  unit steps auto-route to the building that trains them).
+
+BuildChoices:
+    Random:
+        BotName: MyBotName
+        Cycle:
+            - TankOpening
+    Terran:
+        BotName: MyBotName
+        Cycle:
+            - TankOpening
+    Protoss:
+        BotName: MyBotName
+        Cycle:
+            - TankOpening
+    Zerg:
+        BotName: MyBotName
+        Cycle:
+            - TankOpening
+
+Builds:
+    TankOpening:
+        # Keep training SCVs until this many workers exist during the build order
+        ConstantWorkerProductionTill: 20
+        OpeningBuildOrder:
+            # Depot FIRST: in current SC2 data TERRANBUILD_BARRACKS is only
+            # available to workers once a Supply Depot exists (verified via
+            # raw engine verdicts: NotSupported w/o depot vs Success with —
+            # game_logs/raw_test_v4/v5.log configs J/M/P vs N/Q).
+            #
+            # Supply math (v6 300s run): used ≈ scv_alive + 2*marines, minus
+            # harass losses. After 3 depots + 2 marines + 19 SCVs, used sits
+            # ~21-23 — the old "22 MARINE" gate stalled on itself (chicken &
+            # egg: nothing left to produce the +1). Fix: explicit WORKER pump
+            # steps (+1 each) interleaved with marine steps; gates spaced so
+            # every completed step adds >= its own delta.
+            - "12 SUPPLY"
+            - "14 BARRACKS"
+            - "16 GAS"
+            - "17 SUPPLY"
+            - "18 MARINE"
+            - "19 MARINE"
+            - "20 FACTORY"
+            - "21 SUPPLY"
+            - "21 WORKER"          # pump #1: breaks the 21->22 deadlock
+            - "22 MARINE"
+            - "23 WORKER"          # pump #2: harass losses eat the margin
+            - "24 MARINE"
+            - "24 FACTORYTECHLAB"  # factory lab: tank speed-up + clears the
+                                   # SIEGETANK tech check ([BARRACKS, FACTORY,
+                                   #  FACTORYTECHLAB] all ANDed together)
+            - "25 BARRACKSTECHLAB" # rax lab: marine speed-up
+            - "25 ENGINEERINGBAY"  # v20b: turret prereq — TERRAN_TECH_REQUIREMENT
+                                   # maps MISSILETURRET->ENGINEERINGBAY; raw test P
+                                   # proved engine rejects build w/ NotSupported(2)
+                                   # when prereq missing (SCV idles until EB done)
+            - "26 SIEGETANK"       # tank#1 NOW: factory idle since ~t=170
+            - "27 MISSILETURRET"   # v20: cheap anti-ground defense; EB issued at
+                                   # sup25 (~t=400), done ~t=485, turret online
+                                   # ~t=550 — before enemy push t≈640-660 that
+                                   # rolled us in v19
+            - "27 WORKER"          # pump #3: mid-game loss insurance
+            - "28 MARINE"
+            - "30 SIEGETANK"
+            - "32 STARPORT"        # vikings train from the Starport
+            - "34 SUPPLY"          # v21: depot#4 — cap 39→~47; v20b sat at
+                                   # sup=32/39 for 250s because every late gate
+                                   # (36+) was above used AND production had
+                                   # nowhere to add supply
+            - "34 VIKINGFIGHTER"
+            - "34 STIMPACK"        # v21: rax-lab research (+50% marine dmg);
+                                   # issued when lab ready + 50g; done ~t=735
+                                   # ahead of enemy wave 2 (t≈885 in v20b)
+            - "36 MARINE"
+            - "36 MISSILETURRET"   # v22: turret#2 moved 38→36 — v21b showed
+                                   # attrition drags used supply DOWN (army
+                                   # 2tank/5mar → 1tank/1mar), stalling high
+                                   # gates; turret#2 never came at gate 38
+            - "30 VIKINGFIGHTER"
+            - "32 SIEGETANK"
+            # --- v27f: LATE GATES RE-BASED TO REAL USAGE. v27e proved the
+            # v22-style "lower by 2-4" fix insufficient: attrition left used
+            # at 31 while EVERY remaining gate sat at 38+. Trace with
+            # U=31, deltas VIK/TANK/MAR/TANK/SUPP/WKR/MAR/EXP/TANK/VIK/WKR/
+            # MAR/TANK (+2,+2,+2,+2,0,+1,+2,0,+2,+2,+1,+2,+2): each gate must
+            # be <= usage BEFORE that step. Final usage ≈ 51, cap 59 (two
+            # new depots below). ---
+            - "34 MARINE"
+            - "36 SIEGETANK"
+            - "38 SUPPLY"          # depot#5 — cap ~47→~53
+            - "38 WORKER"          # pump #4
+            - "40 MARINE"
+            - "42 EXPAND"          # 2nd CC — economy race vs Easy-Macro
+            - "42 SIEGETANK"
+            - "44 VIKINGFIGHTER"
+            - "46 WORKER"          # pump #5
+            - "46 MARINE"
+            - "48 SIEGETANK"
+            - "50 SUPPLY"          # depot#6 — cap → ~59 (headroom for endgame)
+            # --- v27h: CONTINUOUS LATE PRODUCTION. v27g: order ended at
+            # t≈570, so the peak army (6tank/3vik) only ever DECLINED while
+            # the enemy Macro AI kept producing; our camp at dist~31 bled to
+            # 0 and the roll followed. 14 more steps keep the line staffed.
+            # Trace from U≈51: each gate <= usage BEFORE that step. ---
+            - "52 MARINE"
+            - "54 SIEGETANK"
+            - "56 VIKINGFIGHTER"
+            - "58 WORKER"
+            - "60 MARINE"
+            - "62 SIEGETANK"
+            - "64 SUPPLY"          # depot#7
+            - "66 MARINE"
+            - "68 SIEGETANK"
+            - "70 WORKER"
+            - "72 VIKINGFIGHTER"
+            - "74 MARINE"
+            - "76 SIEGETANK"
